@@ -17,7 +17,7 @@ process.MessageLogger.cerr.FwkReport.reportEvery = 1
 
 process.source = cms.Source("PoolSource",
     # fileNames = cms.untracked.vstring('file:/eos/cms/store/cmst3/group/l1tr/FastPUPPI/15_1_X/fpinputs_140X/v0/GluGluHHTo2B2Tau_PU200/inputs140X_1-1.root'),
-    fileNames = cms.untracked.vstring('file:inputs140X.root'),
+    fileNames = cms.untracked.vstring('file:inputs170X.root'),
     inputCommands = cms.untracked.vstring("keep *",
             "drop l1tPFClusters_*_*_*",
             "drop l1tPFTracks_*_*_*",
