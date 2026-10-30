@@ -41,9 +41,38 @@ output/inputs170X/inputs170X_<source-stem>.root
 output/jetNtuples170X/jetNtuple170X_<source-stem>.root
 ```
 
-Logs live below the chosen run directory. The defaults allow at most 10 input
-jobs and 20 ntuple jobs to run concurrently; change these with
+Logs live below the chosen run directory. The defaults allow at most 75 input
+jobs and 75 ntuple jobs to run concurrently; change these with
 `--max-input-jobs` and `--max-ntuple-jobs`.
+
+## EOS output on CERN batch
+
+When `--output-dir` begins with `/eos/`, each worker copies its completed
+ROOT file directly to EOS with `xrdcp`. This avoids asking the CERN access
+point to write through an EOS FUSE path. Create a valid proxy before
+submitting:
+
+```bash
+voms-proxy-init --voms cms
+```
+
+For example:
+
+```bash
+python3 condor/fastpuppi/submit_fastpuppi.py \
+    /eos/cms/store/group/phys_exotica/L1P2AD/CRAB_PrivateMC/SVJ_mMed_500_SLIMMED_TPs/251117_081934/ \
+    --recursive \
+    --stage ntuples \
+    --cmssw-dir "$CMSSW_BASE" \
+    --output-dir /eos/user/j/jesegal/fastpuppi_outputs/SVJ_mMed_500 \
+    --run-dir "$PWD/condor_out/condor_runs/SVJ_mMed_500" \
+    --max-ntuple-jobs 5000 \
+    --submit
+```
+
+Keep the run directory and logs on AFS or another normal filesystem. For
+non-EOS output paths, including the existing `/dice/...` paths on `hm01`,
+the workflow retains the original HTCondor output-transfer behavior.
 
 ## Pilot and stage-only modes
 

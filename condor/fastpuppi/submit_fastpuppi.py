@@ -95,6 +95,26 @@ def stage_paths(source: Path, output_dir: Path, stage: str) -> tuple[Path | None
     return inputs_path, ntuple_path
 
 
+def is_eos_path(path: Path) -> bool:
+    return str(path).startswith("/eos/")
+
+
+def output_transfer_vars(output_path: Path) -> dict[str, object]:
+    if is_eos_path(output_path):
+        return {
+            "stageout_mode": "eos",
+            "condor_output_files": "",
+            "condor_output_remaps": "",
+            "use_x509userproxy": "True",
+        }
+    return {
+        "stageout_mode": "condor",
+        "condor_output_files": output_path.name,
+        "condor_output_remaps": f"{output_path.name}={output_path}",
+        "use_x509userproxy": "False",
+    }
+
+
 def parse_args() -> argparse.Namespace:
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
     parser = argparse.ArgumentParser(
@@ -151,7 +171,9 @@ def main() -> int:
             raise ValueError(f"Required path is missing: {required_path}")
 
     inputs = discover_inputs(args.sources, args.recursive)
-    output_dir = args.output_dir.expanduser().resolve()
+    # Do not resolve EOS symlinks such as /eos/user/j -> /eos/home-j. The
+    # public /eos/user/... namespace is the path expected by eosuser.cern.ch.
+    output_dir = args.output_dir.expanduser().absolute()
     run_dir = args.run_dir.expanduser().resolve()
     for label, condor_path in (
         ("script directory", SCRIPT_DIR),
@@ -211,7 +233,8 @@ def main() -> int:
                         "stdout": stage1_logs / f"{index:05d}.out",
                         "stderr": stage1_logs / f"{index:05d}.err",
                         "joblog": stage1_logs / f"{index:05d}.log",
-                    },
+                    }
+                    | output_transfer_vars(stage1_path),
                 )
             )
             dag_lines.append(f"CATEGORY {input_node} INPUTS")
@@ -233,7 +256,8 @@ def main() -> int:
                         "stdout": stage2_logs / f"{index:05d}.out",
                         "stderr": stage2_logs / f"{index:05d}.err",
                         "joblog": stage2_logs / f"{index:05d}.log",
-                    },
+                    }
+                    | output_transfer_vars(stage2_path),
                 )
             )
             dag_lines.append(f"CATEGORY {ntuple_node} NTUPLES")
@@ -259,6 +283,10 @@ def main() -> int:
     print(f"Manifest: {manifest_path}")
     print(f"Stage-1 outputs: {stage1_dir}")
     print(f"Stage-2 outputs: {stage2_dir}")
+    if is_eos_path(output_dir):
+        print("Output staging: worker-side xrdcp to EOS")
+    else:
+        print("Output staging: HTCondor file transfer")
 
     if args.submit:
         subprocess.run(["condor_submit_dag", str(dag_path)], cwd=run_dir, check=True)

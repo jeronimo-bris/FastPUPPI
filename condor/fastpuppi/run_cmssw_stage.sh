@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 5 ]]; then
-    echo "Usage: $0 CONFIG INPUT_FILE OUTPUT_FILE MAX_EVENTS CMSSW_DIR" >&2
+if [[ $# -ne 7 ]]; then
+    echo "Usage: $0 CONFIG INPUT_FILE OUTPUT_FILE MAX_EVENTS CMSSW_DIR OUTPUT_DESTINATION STAGEOUT_MODE" >&2
     exit 2
 fi
 
@@ -12,6 +12,8 @@ INPUT_FILE=$2
 OUTPUT_FILE=$3
 MAX_EVENTS=$4
 CMSSW_DIR=$5
+OUTPUT_DESTINATION=$6
+STAGEOUT_MODE=$7
 JOB_WORKDIR=${_CONDOR_SCRATCH_DIR:-$(pwd)}
 
 echo "============================================================"
@@ -20,6 +22,8 @@ echo "Started:    $(date --iso-8601=seconds)"
 echo "Config:     ${CONFIG}"
 echo "Input:      ${INPUT_FILE}"
 echo "Output:     ${OUTPUT_FILE}"
+echo "Destination:${OUTPUT_DESTINATION}"
+echo "Stage-out:  ${STAGEOUT_MODE}"
 echo "Max events: ${MAX_EVENTS}"
 echo "CMSSW:      ${CMSSW_DIR}"
 echo "Scratch:    ${JOB_WORKDIR}"
@@ -74,5 +78,47 @@ if [[ ! -s "${OUTPUT_FILE}" ]]; then
     exit 13
 fi
 
-echo "Finished: $(date --iso-8601=seconds)"
 ls -lh "${OUTPUT_FILE}"
+
+case "${STAGEOUT_MODE}" in
+    condor)
+        echo "Leaving ${OUTPUT_FILE} for HTCondor output transfer"
+        ;;
+    eos)
+        if ! command -v xrdcp >/dev/null 2>&1; then
+            echo "xrdcp is unavailable in the CMSSW runtime environment" >&2
+            exit 15
+        fi
+
+        EOS_PATH=${OUTPUT_DESTINATION}
+        case "${EOS_PATH}" in
+            /eos/user/*|/eos/home-*) EOS_HOST="eosuser.cern.ch" ;;
+            /eos/project/*)          EOS_HOST="eosproject.cern.ch" ;;
+            /eos/cms/*)              EOS_HOST="eoscms.cern.ch" ;;
+            *)
+                echo "Unsupported EOS destination: ${EOS_PATH}" >&2
+                exit 16
+                ;;
+        esac
+
+        # Convert the canonical /eos/home-X/user spelling back to the public
+        # /eos/user/X/user namespace accepted by eosuser.cern.ch.
+        if [[ "${EOS_PATH}" =~ ^/eos/home-([[:alnum:]])/(.+)$ ]]; then
+            EOS_PATH="/eos/user/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+        fi
+        OUTPUT_URI="root://${EOS_HOST}/${EOS_PATH}"
+
+        echo "Copying output to ${OUTPUT_URI}"
+        if ! xrdcp --force --nopbar "${OUTPUT_FILE}" "${OUTPUT_URI}"; then
+            echo "EOS stage-out failed for ${OUTPUT_URI}" >&2
+            exit 17
+        fi
+        echo "EOS stage-out completed"
+        ;;
+    *)
+        echo "Unsupported stage-out mode: ${STAGEOUT_MODE}" >&2
+        exit 18
+        ;;
+esac
+
+echo "Finished: $(date --iso-8601=seconds)"
