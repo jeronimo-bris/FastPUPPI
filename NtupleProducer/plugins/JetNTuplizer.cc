@@ -81,8 +81,28 @@
 
 #include "Compression.h"
 
+#include <algorithm>
+#include <cmath>
+#include <map>
+#include <queue>
+#include <set>
+#include <unordered_set>
+#include <utility>
+#include <vector>
+
 // some tools to fix inputs or calculate them
 namespace jettools{
+
+    struct GenJetTruthInfo {
+        reco::Candidate::LorentzVector visibleP4;
+        float bsmPtFraction = 0.f;
+        float invisiblePtFraction = 0.f;
+        int dominantBsmPdgId = 0;
+        uint32_t nConstituents = 0;
+        uint32_t nVisibleConstituents = 0;
+        uint32_t nBsmConstituents = 0;
+        uint32_t nInvisibleConstituents = 0;
+    };
 
     bool useoffsets = true;
     const float& catchInfs(const float& in,const float& replace_value){
@@ -161,6 +181,8 @@ class JetNTuplizer : public edm::one::EDAnalyzer<edm::one::SharedResources,edm::
         virtual void endRun(edm::Run const&, edm::EventSetup const& iSetup) override { } // framework wants this to be implemented
 
         void fill_genParticles(const edm::Event& iEvent);
+        int findBsmAncestorPdgId(const reco::Candidate* particle) const;
+        jettools::GenJetTruthInfo classifyGenJet(const reco::GenJet& jet) const;
 
         template<unsigned int bits=10>
         static float zip(float f) {
@@ -180,12 +202,17 @@ class JetNTuplizer : public edm::one::EDAnalyzer<edm::one::SharedResources,edm::
         edm::EDGetTokenT<std::vector<pat::Jet>> const offlineJets_;
         edm::EDGetTokenT<std::vector<reco::Vertex>> const offlinePVs_;
         bool doOfflineInfo_;
+        std::set<int> bsmAncestorPdgIds_;
+        std::set<int> invisiblePdgIds_;
+        float l1JetPtThreshold_;
+        float bsmPtFractionThreshold_;
         // const edm::InputTag pileupInfoTag_;
         TTree *tree_;
+        TTree *genTree_;
         uint32_t run_, lumi_; uint64_t event_;
          //   float bZ_;
 
-        // float dRJetGenMatch_ = 0.2;
+        // Keep the legacy gen-jet matching radius unchanged.
         float dRJetGenMatch_ = 0.4;
         bool  isMC_;
         float jetPtMin_ = 5.;
@@ -306,6 +333,40 @@ class JetNTuplizer : public edm::one::EDAnalyzer<edm::one::SharedResources,edm::
     float jet_genmatch_dR_;
     unsigned int jet_genmatch_hflav_;
     int jet_genmatch_pflav_;
+    int jet_index_;
+    int jet_genmatch_index_;
+    bool jet_bsm_in_jet_;
+    float jet_bsm_pt_frac_;
+    int jet_bsm_pdgid_;
+    unsigned int jet_bsm_nconstituents_;
+
+    // One row per generator jet, including jets with no L1 match.
+    unsigned int genjet_index_;
+    float genjet_pt_;
+    float genjet_eta_;
+    float genjet_phi_;
+    float genjet_mass_;
+    float genjet_visible_pt_;
+    float genjet_visible_eta_;
+    float genjet_visible_phi_;
+    float genjet_visible_mass_;
+    unsigned int genjet_nconstituents_;
+    unsigned int genjet_nvisibleconstituents_;
+    bool genjet_bsm_in_jet_;
+    float genjet_bsm_pt_frac_;
+    int genjet_bsm_pdgid_;
+    unsigned int genjet_bsm_nconstituents_;
+    float genjet_invisible_pt_frac_;
+    unsigned int genjet_ninvisibleconstituents_;
+    bool genjet_l1_matched_;
+    int genjet_l1_index_;
+    float genjet_l1_pt_;
+    float genjet_l1_eta_;
+    float genjet_l1_phi_;
+    float genjet_l1_mass_;
+    float genjet_l1_dR_;
+    float genjet_l1_response_;
+    bool genjet_l1_pass_pt_;
 
     // offline
     float jet_offline_pt_;
@@ -480,14 +541,54 @@ JetNTuplizer::JetNTuplizer(const edm::ParameterSet& iConfig) :
     bjetids_(consumes<edm::ValueMap<float>>(iConfig.getParameter<edm::InputTag>("bjetIDs"))),
     offlineJets_(consumes<std::vector<pat::Jet>>(iConfig.getParameter<edm::InputTag>("offlineJets"))),
     offlinePVs_(consumes<std::vector<reco::Vertex>>(iConfig.getParameter<edm::InputTag>("offlinePVs"))),
-    doOfflineInfo_(iConfig.getParameter<bool>("doOfflineInfo"))
+    doOfflineInfo_(iConfig.getParameter<bool>("doOfflineInfo")),
+    l1JetPtThreshold_(iConfig.getParameter<double>("l1JetPtThreshold")),
+    bsmPtFractionThreshold_(iConfig.getParameter<double>("bsmPtFractionThreshold"))
 {
+    for (const int pdgId : iConfig.getParameter<std::vector<int>>("bsmAncestorPdgIds")) {
+        bsmAncestorPdgIds_.insert(std::abs(pdgId));
+    }
+    for (const int pdgId : iConfig.getParameter<std::vector<int>>("invisiblePdgIds")) {
+        invisiblePdgIds_.insert(std::abs(pdgId));
+    }
+
     usesResource("TFileService");
     edm::Service<TFileService> fs;
     tree_ = fs->make<TTree>("Jets","Jets");
-    // tree_->Branch("run",  &run_,  "run/i");
-    // tree_->Branch("lumi", &lumi_, "lumi/i");
+    tree_->Branch("run",  &run_,  "run/i");
+    tree_->Branch("lumi", &lumi_, "lumi/i");
     tree_->Branch("event", &event_, "event/l");
+
+    genTree_ = fs->make<TTree>("GenJets", "GenJets");
+    genTree_->Branch("run", &run_, "run/i");
+    genTree_->Branch("lumi", &lumi_, "lumi/i");
+    genTree_->Branch("event", &event_, "event/l");
+    genTree_->Branch("genjet_index", &genjet_index_);
+    genTree_->Branch("genjet_pt", &genjet_pt_);
+    genTree_->Branch("genjet_eta", &genjet_eta_);
+    genTree_->Branch("genjet_phi", &genjet_phi_);
+    genTree_->Branch("genjet_mass", &genjet_mass_);
+    genTree_->Branch("genjet_visible_pt", &genjet_visible_pt_);
+    genTree_->Branch("genjet_visible_eta", &genjet_visible_eta_);
+    genTree_->Branch("genjet_visible_phi", &genjet_visible_phi_);
+    genTree_->Branch("genjet_visible_mass", &genjet_visible_mass_);
+    genTree_->Branch("genjet_nconstituents", &genjet_nconstituents_);
+    genTree_->Branch("genjet_nvisible_constituents", &genjet_nvisibleconstituents_);
+    genTree_->Branch("genjet_bsm_in_jet", &genjet_bsm_in_jet_);
+    genTree_->Branch("genjet_bsm_pt_frac", &genjet_bsm_pt_frac_);
+    genTree_->Branch("genjet_bsm_pdgid", &genjet_bsm_pdgid_);
+    genTree_->Branch("genjet_bsm_nconstituents", &genjet_bsm_nconstituents_);
+    genTree_->Branch("genjet_invisible_pt_frac", &genjet_invisible_pt_frac_);
+    genTree_->Branch("genjet_ninvisible_constituents", &genjet_ninvisibleconstituents_);
+    genTree_->Branch("genjet_l1_matched", &genjet_l1_matched_);
+    genTree_->Branch("genjet_l1_index", &genjet_l1_index_);
+    genTree_->Branch("genjet_l1_pt", &genjet_l1_pt_);
+    genTree_->Branch("genjet_l1_eta", &genjet_l1_eta_);
+    genTree_->Branch("genjet_l1_phi", &genjet_l1_phi_);
+    genTree_->Branch("genjet_l1_mass", &genjet_l1_mass_);
+    genTree_->Branch("genjet_l1_dR", &genjet_l1_dR_);
+    genTree_->Branch("genjet_l1_response", &genjet_l1_response_);
+    genTree_->Branch("genjet_l1_pass_pt", &genjet_l1_pass_pt_);
 
     tree_->Branch("ngenH", &ngenH_);
     tree_->Branch("genH_pt", &genH_pt_, ngenH_);
@@ -550,6 +651,12 @@ JetNTuplizer::JetNTuplizer(const edm::ParameterSet& iConfig) :
     tree_->Branch("jet_muonmatch_dR", &jet_muonmatch_dR_);
     tree_->Branch("jet_genmatch_hflav", &jet_genmatch_hflav_);
     tree_->Branch("jet_genmatch_pflav", &jet_genmatch_pflav_);
+    tree_->Branch("jet_index", &jet_index_);
+    tree_->Branch("jet_genmatch_index", &jet_genmatch_index_);
+    tree_->Branch("jet_bsm_in_jet", &jet_bsm_in_jet_);
+    tree_->Branch("jet_bsm_pt_frac", &jet_bsm_pt_frac_);
+    tree_->Branch("jet_bsm_pdgid", &jet_bsm_pdgid_);
+    tree_->Branch("jet_bsm_nconstituents", &jet_bsm_nconstituents_);
 
     tree_->Branch("jet_jecmatch_dR", &jet_jecmatch_dR_);
     tree_->Branch("jet_pt_corr", &jet_pt_corr_);
@@ -725,19 +832,88 @@ JetNTuplizer::JetNTuplizer(const edm::ParameterSet& iConfig) :
     // settings for output TFile and TTree
     fs->file().SetCompressionAlgorithm(ROOT::RCompressionSetting::EAlgorithm::kLZ4);
     fs->file().SetCompressionLevel(4);
-    for (int idx = 0; idx < tree_->GetListOfBranches()->GetEntries(); ++idx) {
-        TBranch* br = dynamic_cast<TBranch*>(tree_->GetListOfBranches()->At(idx));
-        if (br) {
-            br->SetBasketSize(1024 * 1024);
+    for (TTree* outputTree : {tree_, genTree_}) {
+        for (int idx = 0; idx < outputTree->GetListOfBranches()->GetEntries(); ++idx) {
+            TBranch* br = dynamic_cast<TBranch*>(outputTree->GetListOfBranches()->At(idx));
+            if (br) {
+                br->SetBasketSize(1024 * 1024);
+            }
         }
-    }
-    if (tree_->GetListOfBranches()->GetEntries() > 0) {
-        tree_->SetAutoFlush(-1024 * 1024 * tree_->GetListOfBranches()->GetEntries());
+        if (outputTree->GetListOfBranches()->GetEntries() > 0) {
+            outputTree->SetAutoFlush(-1024 * 1024 * outputTree->GetListOfBranches()->GetEntries());
+        }
     }
     // -------------------------------------
 }
 
 JetNTuplizer::~JetNTuplizer() { }
+
+int JetNTuplizer::findBsmAncestorPdgId(const reco::Candidate* particle) const
+{
+    if (particle == nullptr || bsmAncestorPdgIds_.empty()) return 0;
+
+    std::queue<const reco::Candidate*> particlesToVisit;
+    std::unordered_set<const reco::Candidate*> visited;
+    particlesToVisit.push(particle);
+    while (!particlesToVisit.empty()) {
+        const reco::Candidate* candidate = particlesToVisit.front();
+        particlesToVisit.pop();
+        if (candidate == nullptr || !visited.insert(candidate).second) continue;
+
+        const int absPdgId = std::abs(candidate->pdgId());
+        if (bsmAncestorPdgIds_.count(absPdgId) != 0) return absPdgId;
+
+        for (size_t imother = 0; imother < candidate->numberOfMothers(); ++imother) {
+            particlesToVisit.push(candidate->mother(imother));
+        }
+    }
+    return 0;
+}
+
+jettools::GenJetTruthInfo JetNTuplizer::classifyGenJet(const reco::GenJet& jet) const
+{
+    jettools::GenJetTruthInfo result;
+    float totalScalarPt = 0.f;
+    float visibleScalarPt = 0.f;
+    float bsmVisibleScalarPt = 0.f;
+    float invisibleScalarPt = 0.f;
+    std::map<int, float> bsmPtByAncestor;
+
+    const auto constituents = jet.getGenConstituents();
+    result.nConstituents = constituents.size();
+    for (const reco::GenParticle* constituent : constituents) {
+        if (constituent == nullptr) continue;
+        const float constituentPt = constituent->pt();
+        totalScalarPt += constituentPt;
+
+        const bool isInvisible = invisiblePdgIds_.count(std::abs(constituent->pdgId())) != 0;
+        if (isInvisible) {
+            invisibleScalarPt += constituentPt;
+            ++result.nInvisibleConstituents;
+            continue;
+        }
+
+        result.visibleP4 += constituent->p4();
+        visibleScalarPt += constituentPt;
+        ++result.nVisibleConstituents;
+
+        const int bsmAncestorPdgId = findBsmAncestorPdgId(constituent);
+        if (bsmAncestorPdgId != 0) {
+            bsmVisibleScalarPt += constituentPt;
+            bsmPtByAncestor[bsmAncestorPdgId] += constituentPt;
+            ++result.nBsmConstituents;
+        }
+    }
+
+    if (visibleScalarPt > 0.f) result.bsmPtFraction = bsmVisibleScalarPt / visibleScalarPt;
+    if (totalScalarPt > 0.f) result.invisiblePtFraction = invisibleScalarPt / totalScalarPt;
+    for (const auto& [pdgId, pt] : bsmPtByAncestor) {
+        if (result.dominantBsmPdgId == 0 || pt > bsmPtByAncestor[result.dominantBsmPdgId]) {
+            result.dominantBsmPdgId = pdgId;
+        }
+    }
+    return result;
+}
 
 // ------------ method called once each job just before starting event loop  ------------
 void
@@ -816,6 +992,7 @@ JetNTuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 
     // gen jets
     std::vector<reco::GenJetRef> jetv_gen;
+    std::vector<jettools::GenJetTruthInfo> genJetTruth;
     if(genjets.isValid()){
         for (auto jets_iter = genjets->begin(); jets_iter != genjets->end(); ++jets_iter) {
             reco::GenJetRef jref (genjets, jets_iter - genjets->begin());
@@ -826,6 +1003,10 @@ JetNTuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
             }
         }
         sort(jetv_gen.begin(), jetv_gen.end(), genJetRefSorter);
+        genJetTruth.reserve(jetv_gen.size());
+        for (const auto& genJet : jetv_gen) {
+            genJetTruth.push_back(classifyGenJet(*genJet));
+        }
     }
 
     // reco jets
@@ -896,6 +1077,11 @@ JetNTuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
         sort(jetv_offline.begin(), jetv_offline.end(), offlineJetRefSorter);
     }
 
+    // These reverse lookup arrays are populated from the legacy L1-to-gen
+    // assignments below. They do not participate in, or modify, that matching.
+    std::vector<int> genToLegacyL1(jetv_gen.size(), -1);
+    std::vector<float> genToLegacyL1DR(jetv_gen.size(), dRJetGenMatch_);
+
     // loop over reco jets
 
     for (size_t i = 0; i < jetv_l1.size(); i++) {
@@ -948,7 +1134,9 @@ JetNTuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 
         jet_bjetscore_ = (*bjetIDhandle)[jetv_l1[i]];
 
-        // match to GEN
+        // match to GEN -- intentionally identical to the legacy implementation
+        // in FastPUPPI_original/NtupleProducer/plugins/JetNTuplizer.cc.
+        jet_index_ = jetv_l1[i].key();
         int   pos_matched = -1;
         float minDR = dRJetGenMatch_;
         for(size_t igen = 0; igen < jetv_gen.size(); igen++){
@@ -967,6 +1155,15 @@ JetNTuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
             jet_genmatch_dR_ = minDR;
             jet_genmatch_hflav_ = (*genJetsFlavour)[edm::RefToBase<reco::Jet>(jetv_gen[pos_matched])].getHadronFlavour();
             jet_genmatch_pflav_ = (*genJetsFlavour)[edm::RefToBase<reco::Jet>(jetv_gen[pos_matched])].getPartonFlavour();
+            jet_genmatch_index_ = jetv_gen[pos_matched].key();
+            jet_bsm_in_jet_ = genJetTruth[pos_matched].bsmPtFraction >= bsmPtFractionThreshold_;
+            jet_bsm_pt_frac_ = genJetTruth[pos_matched].bsmPtFraction;
+            jet_bsm_pdgid_ = genJetTruth[pos_matched].dominantBsmPdgId;
+            jet_bsm_nconstituents_ = genJetTruth[pos_matched].nBsmConstituents;
+            if (genToLegacyL1[pos_matched] < 0 || minDR < genToLegacyL1DR[pos_matched]) {
+                genToLegacyL1[pos_matched] = i;
+                genToLegacyL1DR[pos_matched] = minDR;
+            }
         }
         else{
             jet_genmatch_pt_ = 0;
@@ -976,6 +1173,11 @@ JetNTuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
             jet_genmatch_dR_ = 0;
             jet_genmatch_hflav_ = 0;
             jet_genmatch_pflav_ = 0;
+            jet_genmatch_index_ = -1;
+            jet_bsm_in_jet_ = false;
+            jet_bsm_pt_frac_ = 0.f;
+            jet_bsm_pdgid_ = 0;
+            jet_bsm_nconstituents_ = 0;
         }
 
         // matching with gen-leptons (muons/electrons/hadronic taus)
@@ -1695,6 +1897,55 @@ JetNTuplizer::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
         tree_->Fill();
     }
 
+    // Store every gen jet. The optional L1 information is a reverse lookup of
+    // the legacy matches made above; it does not introduce a second matcher.
+    if (isMC_) {
+        for (size_t igen = 0; igen < jetv_gen.size(); ++igen) {
+            const auto& genJet = jetv_gen[igen];
+            const auto& truth = genJetTruth[igen];
+            genjet_index_ = genJet.key();
+            genjet_pt_ = genJet->pt();
+            genjet_eta_ = genJet->eta();
+            genjet_phi_ = genJet->phi();
+            genjet_mass_ = genJet->mass();
+            genjet_visible_pt_ = truth.visibleP4.pt();
+            genjet_visible_eta_ = truth.visibleP4.pt() > 0.f ? truth.visibleP4.eta() : -999.f;
+            genjet_visible_phi_ = truth.visibleP4.pt() > 0.f ? truth.visibleP4.phi() : -999.f;
+            genjet_visible_mass_ = truth.visibleP4.mass();
+            genjet_nconstituents_ = truth.nConstituents;
+            genjet_nvisibleconstituents_ = truth.nVisibleConstituents;
+            genjet_bsm_in_jet_ = truth.bsmPtFraction >= bsmPtFractionThreshold_;
+            genjet_bsm_pt_frac_ = truth.bsmPtFraction;
+            genjet_bsm_pdgid_ = truth.dominantBsmPdgId;
+            genjet_bsm_nconstituents_ = truth.nBsmConstituents;
+            genjet_invisible_pt_frac_ = truth.invisiblePtFraction;
+            genjet_ninvisibleconstituents_ = truth.nInvisibleConstituents;
+
+            const int matchedPosition = genToLegacyL1[igen];
+            genjet_l1_matched_ = matchedPosition >= 0;
+            if (genjet_l1_matched_) {
+                const auto& l1Jet = jetv_l1[matchedPosition];
+                genjet_l1_index_ = l1Jet.key();
+                genjet_l1_pt_ = l1Jet->pt();
+                genjet_l1_eta_ = l1Jet->eta();
+                genjet_l1_phi_ = l1Jet->phi();
+                genjet_l1_mass_ = l1Jet->mass();
+                genjet_l1_dR_ = genToLegacyL1DR[igen];
+                genjet_l1_response_ = genjet_l1_pt_ / genjet_pt_;
+                genjet_l1_pass_pt_ = genjet_l1_pt_ >= l1JetPtThreshold_;
+            } else {
+                genjet_l1_index_ = -1;
+                genjet_l1_pt_ = -1.f;
+                genjet_l1_eta_ = -999.f;
+                genjet_l1_phi_ = -999.f;
+                genjet_l1_mass_ = -1.f;
+                genjet_l1_dR_ = -1.f;
+                genjet_l1_response_ = -1.f;
+                genjet_l1_pass_pt_ = false;
+            }
+            genTree_->Fill();
+        }
+    }
 
 }
 
