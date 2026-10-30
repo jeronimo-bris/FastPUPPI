@@ -11,6 +11,7 @@ transfer_input_files = $(cmssw_dir)/src/FastPUPPI/NtupleProducer/python/runJetNt
 transfer_output_files = $(condor_output_files)
 transfer_output_remaps = "$(condor_output_remaps)"
 use_x509userproxy = $(use_x509userproxy)
+x509userproxy = $(x509_user_proxy)
 
 output = $(stdout)
 error = $(stderr)

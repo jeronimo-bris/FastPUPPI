@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -217,6 +218,7 @@ def main() -> int:
             "script_dir": SCRIPT_DIR,
             "cmssw_dir": cmssw_dir,
             "max_events": args.max_events,
+            "x509_user_proxy": os.environ.get("X509_USER_PROXY", ""),
         }
 
         if args.stage in ("both", "inputs"):
