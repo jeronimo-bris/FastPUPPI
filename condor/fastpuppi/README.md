@@ -28,6 +28,27 @@ text file containing one ROOT path per line:
 ```bash
 python3 condor/fastpuppi/submit_fastpuppi.py files.txt --submit
 python3 condor/fastpuppi/submit_fastpuppi.py file0.root file1.root --submit
+
+EOS paths are converted to XRootD URIs before they are written to the DAG. CMS
+logical file names beginning with /store/ use the CMS global redirector.
+CERN /eos/cms, /eos/user, and /eos/project paths use their corresponding
+XRootD endpoints.
+
+To discover all files in a DAS dataset, use --das-dataset. The option may be
+repeated and may also be combined with explicit input sources:
+
+    python3 condor/fastpuppi/submit_fastpuppi.py \
+        --das-dataset "/HiddenGluGluH_mH-125_Phi-15_ctau-10_uuuu_TuneCP5_14TeV-pythia8/Phase2Spring24DIGIRECOMiniAOD-PU200_Trk1GeV_140X_mcRun4_realistic_v6-v1/GEN-SIM-DIGI-RAW-MINIAOD" \
+        --stage inputs \
+        --cmssw-dir "$CMSSW_BASE" \
+        --output-dir /eos/user/j/jesegal/fastpuppi_outputs/HiddenGluGluH \
+        --run-dir "$PWD/condor_out/condor_runs/HiddenGluGluH" \
+        --submit
+
+Dataset discovery uses dasgoclient with an unlimited query and converts returned
+/store/... logical file names to CMS global XRootD URLs. Create a valid CMS
+proxy before querying DAS or submitting XRootD jobs.
+
 ```
 
 Without `--submit`, the command only creates `workflow.dag` and `manifest.tsv`.
@@ -108,9 +129,9 @@ condor_q -hold
 DAGMan retries failed nodes twice by default. It writes a rescue DAG if failures
 remain after the retries.
 
-The jobs read the large source ROOT files directly from `/dice`; this assumes
-the execute nodes mount that shared filesystem. They deliberately do not copy
-the roughly 6 GB source files through HTCondor file transfer.
+The jobs read /dice source files directly from the shared filesystem and read
+EOS or DAS inputs through XRootD. They deliberately do not copy large source
+ROOT files through HTCondor file transfer.
 
 The jobs transfer and run the configs directly from:
 

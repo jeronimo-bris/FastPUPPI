@@ -59,13 +59,31 @@ if [[ ! -r "${CONFIG}" ]]; then
     exit 12
 fi
 
-# PoolSource needs the file: protocol for an absolute path on the shared
-# filesystem. Leave explicitly qualified file:/ and root:// URIs unchanged.
+# Use XRootD for CMS and CERN EOS paths. Keep shared DICE paths on file:
+# so the same wrapper remains usable on hm01.
 case "${INPUT_FILE}" in
     file:*|root://*) INPUT_URI=${INPUT_FILE} ;;
-    /*)              INPUT_URI="file:${INPUT_FILE}" ;;
-    *)               INPUT_URI="file:$(pwd)/${INPUT_FILE}" ;;
+    /store/*)        INPUT_URI="root://cms-xrd-global.cern.ch/${INPUT_FILE}" ;;
+    /eos/cms/*)      INPUT_URI="root://eoscms.cern.ch/${INPUT_FILE}" ;;
+    /eos/user/*)     INPUT_URI="root://eosuser.cern.ch/${INPUT_FILE}" ;;
+    /eos/project/*)  INPUT_URI="root://eosproject.cern.ch/${INPUT_FILE}" ;;
+    /eos/home-*)
+        if [[ "${INPUT_FILE}" =~ ^/eos/home-([[:alnum:]])/(.+)$ ]]; then
+            EOS_INPUT_PATH="/eos/user/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+            INPUT_URI="root://eosuser.cern.ch/${EOS_INPUT_PATH}"
+        else
+            echo "Unsupported EOS home path: ${INPUT_FILE}" >&2
+            exit 19
+        fi
+        ;;
+    /eos/*)
+        echo "Unsupported EOS input path: ${INPUT_FILE}" >&2
+        exit 20
+        ;;
+    /*) INPUT_URI="file:${INPUT_FILE}" ;;
+    *)  INPUT_URI="file:$(pwd)/${INPUT_FILE}" ;;
 esac
+echo "Input URI:  ${INPUT_URI}"
 
 echo "Starting cmsRun"
 stdbuf -oL -eL cmsRun "${CONFIG}" \

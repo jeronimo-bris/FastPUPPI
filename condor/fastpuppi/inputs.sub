@@ -20,6 +20,7 @@ log = $(joblog)
 request_cpus = 4
 request_memory = 8GB
 request_disk = 10GB
++JobFlavour = "longlunch"
 
 requirements = (Machine =!= "hd91.dice.priv")
 
