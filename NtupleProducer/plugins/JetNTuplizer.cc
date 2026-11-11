@@ -90,6 +90,23 @@
 #include <utility>
 #include <vector>
 
+namespace {
+bool isBsmPdgId(int pdgId) {
+    const int id = std::abs(pdgId);
+
+    const bool isSUEP =
+        id == 999998 ||
+        id == 999999;
+
+    const bool isSVJ =
+        id == 51 ||
+        id == 53 ||
+        (id >= 4900000 && id < 5000000);
+
+    return isSUEP || isSVJ;
+}
+}  // namespace
+
 // some tools to fix inputs or calculate them
 namespace jettools{
 
@@ -850,7 +867,7 @@ JetNTuplizer::~JetNTuplizer() { }
 
 int JetNTuplizer::findBsmAncestorPdgId(const reco::Candidate* particle) const
 {
-    if (particle == nullptr || bsmAncestorPdgIds_.empty()) return 0;
+    if (particle == nullptr) return 0;
 
     std::queue<const reco::Candidate*> particlesToVisit;
     std::unordered_set<const reco::Candidate*> visited;
@@ -861,7 +878,7 @@ int JetNTuplizer::findBsmAncestorPdgId(const reco::Candidate* particle) const
         if (candidate == nullptr || !visited.insert(candidate).second) continue;
 
         const int absPdgId = std::abs(candidate->pdgId());
-        if (bsmAncestorPdgIds_.count(absPdgId) != 0) return absPdgId;
+        if (isBsmPdgId(absPdgId) || bsmAncestorPdgIds_.count(absPdgId) != 0) return absPdgId;
 
         for (size_t imother = 0; imother < candidate->numberOfMothers(); ++imother) {
             particlesToVisit.push(candidate->mother(imother));

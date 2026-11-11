@@ -107,7 +107,8 @@ def addJetNTuple(trktype = "extended", nparam = 5, tagged = True, offline = True
         bsmAncestorPdgIds = cms.vint32(
             4900021, 4900023, 4900101, 4900111, 4900113, 5100039
         ),
-        invisiblePdgIds = cms.vint32(4900111),
+        # Stable invisible SVJ daughters; signs are handled with abs(pdgId).
+        invisiblePdgIds = cms.vint32(51, 53),
         l1JetPtThreshold = cms.double(30.0),
         bsmPtFractionThreshold = cms.double(0.5),
         nnTaus = cms.InputTag("l1tNNTauProducerPuppi","L1PFTausNN"),
