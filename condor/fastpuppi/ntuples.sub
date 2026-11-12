@@ -8,7 +8,7 @@ when_to_transfer_output = ON_SUCCESS
 success_exit_code = 0
 
 transfer_input_files = $(cmssw_dir)/src/FastPUPPI/NtupleProducer/python/runJetNtuple_htcondor.py
-transfer_output_files = $(condor_output_files)
+transfer_output_files = "$(condor_output_files)"
 transfer_output_remaps = "$(condor_output_remaps)"
 use_x509userproxy = $(use_x509userproxy)
 x509userproxy = $(x509_user_proxy)
